@@ -4,7 +4,6 @@ import (
 	"github.com/ajeet/go-crg/internal/parser"
 	"github.com/ajeet/go-crg/internal/store"
 	"gonum.org/v1/gonum/graph/simple"
-	"gonum.org/v1/gonum/graph/traverse"
 )
 
 type ImpactAnalyzer struct {
@@ -26,25 +25,24 @@ func (n NodeWrapper) ID() int64 { return n.id }
 func (a *ImpactAnalyzer) GetImpactRadius(changedFiles []string, maxDepth int) ([]parser.Node, error) {
 	dg := simple.NewDirectedGraph()
 	
-	// Map to keep track of nodes by QualifiedName
 	qnToID := make(map[string]int64)
+	idToQN := make(map[int64]string)
 	idToNode := make(map[int64]parser.Node)
 	var nextID int64
 
-	// Helper to get or create ID
 	getOrCreateID := func(qn string) int64 {
 		if id, ok := qnToID[qn]; ok {
 			return id
 		}
 		id := nextID
 		qnToID[qn] = id
+		idToQN[id] = qn
+		dg.AddNode(simple.Node(id))
 		nextID++
 		return id
 	}
 
-	// In a real implementation, we would only load relevant edges.
-	// For simplicity, let's assume we have a method to get all edges or load them incrementally.
-	// Here we just fetch nodes from changed files to start with.
+	// 1. Fetch nodes for changed files and seed the traversal
 	seeds := []int64{}
 	for _, file := range changedFiles {
 		nodes, err := a.store.GetNodesByFile(file)
@@ -55,29 +53,68 @@ func (a *ImpactAnalyzer) GetImpactRadius(changedFiles []string, maxDepth int) ([
 			id := getOrCreateID(node.QualifiedName)
 			idToNode[id] = node
 			seeds = append(seeds, id)
-			dg.AddNode(simple.Node(id))
 		}
 	}
 
-	// BFS traversal
+	// 2. Load all edges to build the graph structure
+	// Note: For large repos, loading all edges could be memory intensive, 
+	// but it is the simplest approach for a complete BFS.
+	// In a real optimized system, we would query the DB dynamically during traversal.
+	// For this MVP, we assume a small enough graph or implement a lazy load.
+	
+	// Let's implement lazy loading by querying the DB dynamically during the BFS
 	impactedIDs := make(map[int64]bool)
-	bfs := traverse.BreadthFirst{
-		Visit: func(n dg.Node) {
-			impactedIDs[n.ID()] = true
-		},
+	frontier := make([]int64, len(seeds))
+	copy(frontier, seeds)
+
+	depth := 0
+	for len(frontier) > 0 && depth < maxDepth {
+		var nextFrontier []int64
+		for _, id := range frontier {
+			if impactedIDs[id] {
+				continue
+			}
+			impactedIDs[id] = true
+
+			qn := idToQN[id]
+			
+			// Nodes that this node affects (Forward edges: CALLS, IMPORTS_FROM, etc where this node is SOURCE)
+			outEdges, _ := a.store.GetEdgesBySource(qn)
+			for _, e := range outEdges {
+				targetID := getOrCreateID(e.TargetQualified)
+				dg.SetEdge(simple.Edge{F: simple.Node(id), T: simple.Node(targetID)})
+				if !impactedIDs[targetID] {
+					nextFrontier = append(nextFrontier, targetID)
+				}
+			}
+
+			// Nodes that affect this node (Reverse edges: where this node is TARGET)
+			inEdges, _ := a.store.GetEdgesByTarget(qn)
+			for _, e := range inEdges {
+				sourceID := getOrCreateID(e.SourceQualified)
+				dg.SetEdge(simple.Edge{F: simple.Node(sourceID), T: simple.Node(id)})
+				if !impactedIDs[sourceID] {
+					nextFrontier = append(nextFrontier, sourceID)
+				}
+			}
+		}
+		frontier = nextFrontier
+		depth++
 	}
 
-	// This is a simplified skeleton. 
-	// To actually find impact, we need to load edges from the DB into the 'dg' graph
-	// and then run the traversal.
-	
-	// TODO: Load edges into 'dg'
-	
+	// Fetch full node data for impacted nodes that weren't in the seeds
 	results := []parser.Node{}
 	for id := range impactedIDs {
-		if node, ok := idToNode[id]; ok {
-			results = append(results, node)
+		node, ok := idToNode[id]
+		if !ok {
+			// Fetch from DB if we don't have it in memory yet
+			qn := idToQN[id]
+			// A real implementation would have a GetNode(qn) method in the store
+			// For now, we simulate this by leaving it out of results if missing,
+			// or returning a skeleton node.
+			node = parser.Node{QualifiedName: qn}
 		}
+		results = append(results, node)
 	}
 
 	return results, nil

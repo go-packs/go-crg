@@ -20,13 +20,20 @@ func NewMCPServer(s *store.Store, analyzer *graph.ImpactAnalyzer) *server.MCPSer
 		Description: "Build or update the code knowledge graph for a repository.",
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
-			Properties: map[string]mcp.ToolInputSchemaProperty{
-				"repo_root": {Type: "string", Description: "The absolute path to the repository root."},
+			Properties: map[string]interface{}{
+				"repo_root": map[string]interface{}{
+					"type": "string", 
+					"description": "The absolute path to the repository root.",
+				},
 			},
 			Required: []string{"repo_root"},
 		},
 	}, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		repoRoot, ok := request.Params.Arguments["repo_root"].(string)
+		args, ok := request.Params.Arguments.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid arguments format")
+		}
+		repoRoot, ok := args["repo_root"].(string)
 		if !ok {
 			return nil, fmt.Errorf("repo_root must be a string")
 		}
@@ -45,18 +52,26 @@ func NewMCPServer(s *store.Store, analyzer *graph.ImpactAnalyzer) *server.MCPSer
 		Description: "Calculate the impact radius from a set of changed files.",
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
-			Properties: map[string]mcp.ToolInputSchemaProperty{
-				"changed_files": {
-					Type: "array",
-					Items: &mcp.ToolInputSchemaProperty{Type: "string"},
-					Description: "List of changed file paths relative to repo root.",
+			Properties: map[string]interface{}{
+				"changed_files": map[string]interface{}{
+					"type": "array",
+					"items": map[string]interface{}{"type": "string"},
+					"description": "List of changed file paths relative to repo root.",
 				},
-				"max_depth": {Type: "integer", Description: "Max hops to traverse (default 2)."},
+				"max_depth": map[string]interface{}{
+					"type": "integer", 
+					"description": "Max hops to traverse (default 2).",
+				},
 			},
 			Required: []string{"changed_files"},
 		},
 	}, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		changedFilesRaw, ok := request.Params.Arguments["changed_files"].([]interface{})
+		args, ok := request.Params.Arguments.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid arguments format")
+		}
+		
+		changedFilesRaw, ok := args["changed_files"].([]interface{})
 		if !ok {
 			return nil, fmt.Errorf("changed_files must be an array")
 		}
@@ -68,7 +83,12 @@ func NewMCPServer(s *store.Store, analyzer *graph.ImpactAnalyzer) *server.MCPSer
 			}
 		}
 
-		results, err := analyzer.GetImpactRadius(changedFiles, 2)
+		maxDepth := 2
+		if m, ok := args["max_depth"].(float64); ok {
+			maxDepth = int(m)
+		}
+
+		results, err := analyzer.GetImpactRadius(changedFiles, maxDepth)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Error calculating impact: %v", err)), nil
 		}

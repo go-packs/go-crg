@@ -25,6 +25,7 @@ func NewWalker(repoRoot string, store ResultStore) *Walker {
 		repoRoot: repoRoot,
 		parsers: map[string]CodeParser{
 			"python": NewPythonParser(),
+			"go":     NewGoParser(),
 		},
 		store: store,
 	}
@@ -53,7 +54,7 @@ func (w *Walker) BuildGraph(ctx context.Context) error {
 				select {
 				case files <- path:
 				case <-ctx.Done():
-					return ctx.Done()
+					return ctx.Err()
 				}
 			}
 			return nil

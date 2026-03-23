@@ -53,12 +53,12 @@ func (p *PythonParser) ParseFile(path string) ([]Node, []Edge, error) {
 	})
 
 	// Walk the AST
-	p.walk(tree.RootNode(), content, path, "", &nodes, &edges)
+	p.walk(tree.RootNode(), content, path, "", "", &nodes, &edges)
 
 	return nodes, edges, nil
 }
 
-func (p *PythonParser) walk(n *sitter.Node, content []byte, filePath string, parentClass string, nodes *[]Node, edges *[]Edge) {
+func (p *PythonParser) walk(n *sitter.Node, content []byte, filePath string, parentClass string, enclosingFunc string, nodes *[]Node, edges *[]Edge) {
 	nodeType := n.Type()
 
 	switch nodeType {
@@ -98,7 +98,7 @@ func (p *PythonParser) walk(n *sitter.Node, content []byte, filePath string, par
 
 			// Recurse into class body
 			for i := 0; i < int(n.ChildCount()); i++ {
-				p.walk(n.Child(i), content, filePath, name, nodes, edges)
+				p.walk(n.Child(i), content, filePath, name, "", nodes, edges)
 			}
 			return
 		}
@@ -136,13 +136,60 @@ func (p *PythonParser) walk(n *sitter.Node, content []byte, filePath string, par
 				Line:            int(n.StartPoint().Row) + 1,
 				UpdatedAt:       time.Now(),
 			})
+
+			// Recurse to find calls inside the function
+			for i := 0; i < int(n.ChildCount()); i++ {
+				p.walk(n.Child(i), content, filePath, parentClass, name, nodes, edges)
+			}
+			return
+		}
+		
+	case "call":
+		if enclosingFunc != "" {
+			callName := p.getCallName(n, content)
+			if callName != "" {
+				caller := fmt.Sprintf("%s::%s", filePath, enclosingFunc)
+				if parentClass != "" {
+					caller = fmt.Sprintf("%s::%s.%s", filePath, parentClass, enclosingFunc)
+				}
+				*edges = append(*edges, Edge{
+					Kind:            EdgeCalls,
+					SourceQualified: caller,
+					TargetQualified: callName, // Bare name, would need resolution in a full impl
+					FilePath:        filePath,
+					Line:            int(n.StartPoint().Row) + 1,
+					UpdatedAt:       time.Now(),
+				})
+			}
 		}
 	}
 
 	// Default recursion
 	for i := 0; i < int(n.ChildCount()); i++ {
-		p.walk(n.Child(i), content, filePath, parentClass, nodes, edges)
+		p.walk(n.Child(i), content, filePath, parentClass, enclosingFunc, nodes, edges)
 	}
+}
+
+func (p *PythonParser) getCallName(n *sitter.Node, content []byte) string {
+	if n.ChildCount() == 0 {
+		return ""
+	}
+	first := n.Child(0)
+	
+	if first.Type() == "identifier" {
+		return first.Content(content)
+	}
+	
+	if first.Type() == "attribute" {
+		// e.g. obj.method() -> get "method"
+		for i := int(first.ChildCount()) - 1; i >= 0; i-- {
+			child := first.Child(i)
+			if child.Type() == "identifier" {
+				return child.Content(content)
+			}
+		}
+	}
+	return ""
 }
 
 func (p *PythonParser) getName(n *sitter.Node, content []byte) string {
