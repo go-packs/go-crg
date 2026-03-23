@@ -62,38 +62,37 @@ func (a *ImpactAnalyzer) GetImpactRadius(changedFiles []string, maxDepth int) ([
 	// In a real optimized system, we would query the DB dynamically during traversal.
 	// For this MVP, we assume a small enough graph or implement a lazy load.
 	
-	// Let's implement lazy loading by querying the DB dynamically during the BFS
+	// BFS traversal
 	impactedIDs := make(map[int64]bool)
 	frontier := make([]int64, len(seeds))
 	copy(frontier, seeds)
+
+	for _, id := range seeds {
+		impactedIDs[id] = true
+	}
 
 	depth := 0
 	for len(frontier) > 0 && depth < maxDepth {
 		var nextFrontier []int64
 		for _, id := range frontier {
-			if impactedIDs[id] {
-				continue
-			}
-			impactedIDs[id] = true
-
 			qn := idToQN[id]
 			
-			// Nodes that this node affects (Forward edges: CALLS, IMPORTS_FROM, etc where this node is SOURCE)
+			// Forward edges
 			outEdges, _ := a.store.GetEdgesBySource(qn)
 			for _, e := range outEdges {
 				targetID := getOrCreateID(e.TargetQualified)
-				dg.SetEdge(simple.Edge{F: simple.Node(id), T: simple.Node(targetID)})
 				if !impactedIDs[targetID] {
+					impactedIDs[targetID] = true
 					nextFrontier = append(nextFrontier, targetID)
 				}
 			}
 
-			// Nodes that affect this node (Reverse edges: where this node is TARGET)
+			// Reverse edges
 			inEdges, _ := a.store.GetEdgesByTarget(qn)
 			for _, e := range inEdges {
 				sourceID := getOrCreateID(e.SourceQualified)
-				dg.SetEdge(simple.Edge{F: simple.Node(sourceID), T: simple.Node(id)})
 				if !impactedIDs[sourceID] {
+					impactedIDs[sourceID] = true
 					nextFrontier = append(nextFrontier, sourceID)
 				}
 			}

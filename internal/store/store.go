@@ -100,7 +100,7 @@ func (s *Store) SaveFileResults(filePath string, nodes []parser.Node, edges []pa
 	for _, edge := range edges {
 		_, err := tx.NamedExec(`
 			INSERT INTO edges (kind, source_qualified, target_qualified, file_path, line, updated_at)
-			VALUES (:kind, :source, :target, :file_path, :line, :updated_at)
+			VALUES (:kind, :source_qualified, :target_qualified, :file_path, :line, :updated_at)
 		`, edge)
 		if err != nil {
 			return fmt.Errorf("failed to insert edge: %w", err)
