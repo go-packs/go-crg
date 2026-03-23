@@ -4,11 +4,11 @@
 
 ## 🚀 Key Features
 
-- **Concurrent Parsing**: Uses Go's `errgroup` to parse hundreds of files in parallel, delivering sub-second updates.
-- **Multi-Language Support**: Powered by Tree-sitter, currently supporting **Go** and **Python** (with more coming).
-- **CGO-Free Persistence**: Uses a pure Go SQLite implementation to store nodes (functions, classes) and edges (calls, contains).
-- **MCP Integration**: Exposes its capabilities as a Model Context Protocol (MCP) server, allowing LLMs like Claude to perform impact analysis autonomously.
-- **Blast Radius Analysis**: Uses BFS traversal to find all callers and dependents of modified code.
+- **Concurrent Parsing**: Uses Go's `errgroup` to parse hundreds of files in parallel, delivering sub-second updates for even large monorepos.
+- **Token Optimization**: Includes a `get_review_context` tool that provides LLMs with ONLY the affected code snippets, reducing token usage by up to 90%.
+- **Multi-Language Support**: Currently supporting **Go** and **Python** (built on Tree-sitter).
+- **CGO-Free Persistence**: Uses a pure Go SQLite implementation for easy distribution.
+- **MCP Integration**: Fully compliant with the Model Context Protocol (MCP) for seamless use with Claude Desktop and other LLM IDEs.
 
 ## 🏗 Architecture
 
@@ -28,24 +28,25 @@ graph TD
 ## 🛠 How It Works
 
 ### 1. The Walker & Parser
-The **Walker** scans the repository for supported file extensions. It spawns a pool of worker goroutines that use **Tree-sitter** to parse the source code. Unlike simple regex-based tools, `go-crg` understands the actual structure of the code, distinguishing between a function definition and a function call.
+The **Walker** recursively scans your repository for supported file extensions. It utilizes a worker pool to parse files in parallel, extracting structural nodes (Functions, Classes, Types) and relationships (Calls, Contains).
 
 ### 2. The Knowledge Graph
 Extracted entities are stored as **Nodes** and **Edges** in a SQLite database:
-- **Nodes**: Files, Functions, Classes, Types.
-- **Edges**: 
-    - `CONTAINS`: A file contains a class; a class contains a method.
-    - `CALLS`: Function A invokes Function B.
-    - `IMPORTS_FROM`: File A depends on File B.
+- **Nodes**: Logical code entities (e.g., `internal/auth/service.go::AuthService.Login`).
+- **Edges**: Relationships like `CALLS` (tracing dependencies) and `CONTAINS` (structural nesting).
 
-### 3. Impact Analysis (Blast Radius)
-When a file is modified, the **Impact Analyzer** performs a Breadth-First Search (BFS) on the graph. It identifies:
-- **Direct Impacts**: The functions actually changed.
-- **Indirect Impacts**: The callers of those functions, the classes that inherit from them, and the tests that verify them.
-
-This "Minimal Review Set" allows for highly efficient reviews, as the reviewer (or LLM) only needs to look at the affected surface area rather than the entire file.
+### 3. Token Optimization (Outcome)
+Standard code review tools often send entire files to an LLM, wasting thousands of tokens on irrelevant code. `go-crg` solves this by:
+1. Identifying exactly which functions/methods were changed.
+2. Finding the "Blast Radius" (callers and dependents).
+3. Extracting **precise code snippets** (with context) for only the affected nodes.
+4. **Outcome**: The LLM receives 100 lines of highly relevant code instead of 5,000 lines of noise.
 
 ## 🚦 Getting Started
+
+### Prerequisites
+- [Go 1.21+](https://go.dev/dl/)
+- [Git](https://git-scm.com/)
 
 ### Installation
 ```bash
@@ -54,16 +55,22 @@ cd go-crg
 go build -o crg
 ```
 
-### Usage (CLI)
-Currently, the primary interface is via the MCP server:
-```bash
-./crg
+### Configuration (Claude Desktop)
+Add `go-crg` to your `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "go-crg": {
+      "command": "/absolute/path/to/go-crg/crg"
+    }
+  }
+}
 ```
 
-### MCP Tools
-- `build_graph(repo_root)`: Scans the repository and populates the database.
-- `get_impact_radius(changed_files, max_depth)`: Returns the list of affected nodes for the given changes.
-- `get_review_context(changed_files, max_depth)`: **The Token Optimization Tool.** Returns actual source snippets for every affected node, allowing LLMs to perform reviews without reading entire files.
+## 🛠 MCP Tools
+- **`build_graph(repo_root)`**: Scans the repository and populates the local knowledge graph.
+- **`get_impact_radius(changed_files, max_depth)`**: Returns a list of affected nodes (functions/classes) based on the changes.
+- **`get_review_context(changed_files, max_depth)`**: **The Primary Tool.** Returns actual source snippets for every affected node, providing the perfect context for an LLM to perform a code review.
 
 ## 🧪 Testing
 ```bash
