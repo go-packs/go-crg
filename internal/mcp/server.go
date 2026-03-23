@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ajeet/go-crg/internal/graph"
 	"github.com/ajeet/go-crg/internal/parser"
@@ -94,6 +95,78 @@ func NewMCPServer(s *store.Store, analyzer *graph.ImpactAnalyzer) *server.MCPSer
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("Calculated impact radius. Found %d affected nodes.", len(results))), nil
+	})
+
+	// 3. Tool: get_review_context (The TOKEN OPTIMIZATION tool)
+	srv.AddTool(mcp.Tool{
+		Name:        "get_review_context",
+		Description: "Generate a token-optimized review context including impacted code snippets.",
+		InputSchema: mcp.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]interface{}{
+				"changed_files": map[string]interface{}{
+					"type": "array",
+					"items": map[string]interface{}{"type": "string"},
+					"description": "List of changed file paths relative to repo root.",
+				},
+				"max_depth": map[string]interface{}{
+					"type": "integer",
+					"description": "Max hops for blast radius (default 2).",
+				},
+			},
+			Required: []string{"changed_files"},
+		},
+	}, func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		args, ok := request.Params.Arguments.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid arguments format")
+		}
+
+		changedFilesRaw, ok := args["changed_files"].([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("changed_files must be an array")
+		}
+
+		changedFiles := []string{}
+		for _, f := range changedFilesRaw {
+			if s, ok := f.(string); ok {
+				changedFiles = append(changedFiles, s)
+			}
+		}
+
+		maxDepth := 2
+		if m, ok := args["max_depth"].(float64); ok {
+			maxDepth = int(m)
+		}
+
+		// 1. Get the affected nodes
+		nodes, err := analyzer.GetImpactRadius(changedFiles, maxDepth)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Error calculating impact: %v", err)), nil
+		}
+
+		// 2. Extract snippets for the nodes (Token-saving step)
+		var contextBuilder strings.Builder
+		contextBuilder.WriteString("### RELEVANT REVIEW CONTEXT (Token Optimized) ###\n\n")
+
+		for _, n := range nodes {
+			if n.Kind == parser.KindFile {
+				continue // Skip the raw file node
+			}
+
+			snippet, err := parser.ExtractSnippet(n.FilePath, n.LineStart, n.LineEnd)
+			if err != nil {
+				continue
+			}
+
+			contextBuilder.WriteString(fmt.Sprintf("--- Node: %s (%s) ---\n", n.QualifiedName, n.Kind))
+			contextBuilder.WriteString(fmt.Sprintf("File: %s (Lines %d-%d)\n", n.FilePath, n.LineStart, n.LineEnd))
+			contextBuilder.WriteString("```\n")
+			contextBuilder.WriteString(snippet)
+			contextBuilder.WriteString("\n```\n\n")
+		}
+
+		return mcp.NewToolResultText(contextBuilder.String()), nil
 	})
 
 	return srv
